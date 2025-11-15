@@ -18,6 +18,20 @@ a standalone executable and as a Docker container.
 > **Note**: model weights are not bundled with this repository. Place your
 > existing `models/` and `runs/` directories at the repository root before
 > launching the application.
+>
+> If your project root lives at `G:\CHYMERA` (for example on Windows), the
+> analyser will look for the assets at the following absolute paths:
+>
+> | Purpose | Expected path |
+> | ------- | ------------- |
+> | Lung UNet segmentation weights | `G:\CHYMERA\models\unet-6v.pt` |
+> | Lung inclusion CNN classifier | `G:\CHYMERA\models\cnn_model.h5` |
+> | YOLOv8 artefact detector (set 14) | `G:\CHYMERA\runs\detect\yolov8-chest-xray14\weights\best.pt` |
+> | YOLOv8 artefact detector (set 24) | `G:\CHYMERA\runs\detect\yolov8-chest-xray24\weights\best.pt` |
+>
+> These mirror the relative locations from the original Streamlit prototype;
+> copy them verbatim into the indicated locations so the Qt application can
+> load them at startup.
 
 ## Getting started
 
