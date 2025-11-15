@@ -84,6 +84,7 @@ class ImageProcessor:
     def __init__(self) -> None:
         self._history: Dict[Path, AnalysisBundle] = {}
         self._base_path = BASE_PATH
+        self._base_path = Path.cwd()
 
     # ------------------------------------------------------------------
     def process(self, image_path: Path) -> AnalysisBundle:
@@ -192,6 +193,7 @@ class ImageProcessor:
     def _predict_mask(unet: torch.nn.Module, tensor: torch.Tensor, device: torch.device) -> np.ndarray:
         input_tensor = torch.stack([tensor]).to(device)
         with torch.inference_mode():
+        with torch.no_grad():
             output = unet(input_tensor)
             probs = torch.nn.functional.log_softmax(output, dim=1)
             pred_mask = torch.argmax(probs, dim=1)[0].cpu().numpy()
@@ -237,6 +239,7 @@ class ImageProcessor:
         input_tensor = torch.stack([tensor]).to(device)
         input_tensor.requires_grad_(True)
         with torch.enable_grad():
+        with torch.no_grad():
             output = unet(input_tensor)
         class_idx = 1
         activation_map = extractor(class_idx, output)[0].cpu().numpy()
@@ -274,6 +277,9 @@ class ImageProcessor:
         with torch.inference_mode():
             pred_tensor = clavicle_model(img_tensor)
         pred = torch.sigmoid(pred_tensor).cpu().numpy()
+        with torch.no_grad():
+            pred_tensor = clavicle_model(img_tensor)
+        pred = 1 / (1 + np.exp(-pred_tensor.cpu().numpy()))
         pred[pred < 0.5] = 0
         pred[pred >= 0.5] = 1
 
