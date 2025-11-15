@@ -14,6 +14,7 @@ import torchvision
 import torchxrayvision as xrv
 from tensorflow.keras.preprocessing.image import img_to_array
 
+from ..config import BASE_PATH
 from .model_loader import load_models, ModelLoadError
 
 try:  # Optional dependency
@@ -82,6 +83,7 @@ class ImageProcessor:
 
     def __init__(self) -> None:
         self._history: Dict[Path, AnalysisBundle] = {}
+        self._base_path = BASE_PATH
         self._base_path = Path.cwd()
 
     # ------------------------------------------------------------------

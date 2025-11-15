@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import functools
+import sys
 from pathlib import Path
 from typing import Tuple
 
@@ -36,6 +37,14 @@ def load_models(base_path: Path) -> Tuple[torch.nn.Module, tf.keras.Model, YOLO,
         if not required.exists():
             raise ModelLoadError(f"Missing model weight: {required}")
 
+    try:
+        from src.models import PretrainedUNet
+    except ModuleNotFoundError:
+        sys.path.append(str(base_path))
+        try:
+            from src.models import PretrainedUNet
+        except ModuleNotFoundError as inner_exc:  # pragma: no cover - defensive
+            raise ModelLoadError("Unable to import src.models.PretrainedUNet") from inner_exc
     from src.models import PretrainedUNet
 
     unet = PretrainedUNet(in_channels=1, out_channels=2, batch_norm=True, upscale_mode="bilinear")

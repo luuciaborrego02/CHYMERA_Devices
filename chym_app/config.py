@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 
 @dataclass(frozen=True)
@@ -20,3 +21,11 @@ palette = Palette()
 
 APP_NAME = "Quality Chest Analyzer"
 APP_ICON = "🩺"
+
+_WINDOWS_BASE = Path(r"G:\CHYMERA")
+if _WINDOWS_BASE.exists():
+    BASE_PATH = _WINDOWS_BASE
+else:
+    BASE_PATH = Path(__file__).resolve().parents[1]
+
+__all__ = ["palette", "APP_NAME", "APP_ICON", "BASE_PATH"]
