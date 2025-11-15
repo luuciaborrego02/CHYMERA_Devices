@@ -236,6 +236,8 @@ class ImageProcessor:
             return None
         extractor = GradCAM(unet, target_layer="dec1.conv2", input_shape=(1, 512, 512))
         input_tensor = torch.stack([tensor]).to(device)
+        input_tensor.requires_grad_(True)
+        with torch.enable_grad():
         with torch.no_grad():
             output = unet(input_tensor)
         class_idx = 1
