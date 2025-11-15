@@ -84,6 +84,7 @@ class ImageProcessor:
     def __init__(self) -> None:
         self._history: Dict[Path, AnalysisBundle] = {}
         self._base_path = BASE_PATH
+        self._base_path = Path.cwd()
 
     # ------------------------------------------------------------------
     def process(self, image_path: Path) -> AnalysisBundle:
