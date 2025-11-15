@@ -84,6 +84,7 @@ class ImageProcessor:
     def __init__(self) -> None:
         self._history: Dict[Path, AnalysisBundle] = {}
         self._base_path = BASE_PATH
+        self._base_path = Path.cwd()
 
     # ------------------------------------------------------------------
     def process(self, image_path: Path) -> AnalysisBundle:
@@ -237,6 +238,7 @@ class ImageProcessor:
         input_tensor = torch.stack([tensor]).to(device)
         input_tensor.requires_grad_(True)
         with torch.enable_grad():
+        with torch.no_grad():
             output = unet(input_tensor)
         class_idx = 1
         activation_map = extractor(class_idx, output)[0].cpu().numpy()
