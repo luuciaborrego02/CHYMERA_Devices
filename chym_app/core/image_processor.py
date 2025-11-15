@@ -192,6 +192,7 @@ class ImageProcessor:
     @staticmethod
     def _predict_mask(unet: torch.nn.Module, tensor: torch.Tensor, device: torch.device) -> np.ndarray:
         input_tensor = torch.stack([tensor]).to(device)
+        with torch.inference_mode():
         with torch.no_grad():
             output = unet(input_tensor)
             probs = torch.nn.functional.log_softmax(output, dim=1)
@@ -273,6 +274,9 @@ class ImageProcessor:
         ])
         img_input = transform(img_gray)
         img_tensor = torch.from_numpy(img_input)
+        with torch.inference_mode():
+            pred_tensor = clavicle_model(img_tensor)
+        pred = torch.sigmoid(pred_tensor).cpu().numpy()
         with torch.no_grad():
             pred_tensor = clavicle_model(img_tensor)
         pred = 1 / (1 + np.exp(-pred_tensor.cpu().numpy()))
