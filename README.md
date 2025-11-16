@@ -1,6 +1,6 @@
 # Quality Chest Analyzer
 
-AI-assisted toolkit for evaluating chest X-ray quality. The desktop Qt app (`chym_app/`) delivers the full workflow for loading studies, running the ML pipeline, visualising overlays, dashboards, and chatting with the ChymAI assistant.
+AI-assisted toolkit for evaluating chest X-ray quality. The desktop app (`chym_app/`) delivers the full workflow for loading studies, running the ML pipeline, visualising overlays, dashboards, and chatting with the ChymAI assistant.
 
 All processing happens locally using the bundled PyTorch, TensorFlow, YOLO and TorchXRayVision models. Optional LLM assistance is powered by OpenAI via environment variables or a secure proxy server (recommended).
 
@@ -86,52 +86,6 @@ chym-analyzer
 
 ## Configuring the LLM Assistant
 
-### ✅ Option 1 — Use your API key through a server (recommended)
-
-Never embed your `OPENAI_API_KEY` in client code or binaries. Instead:
-
-1. Deploy a lightweight backend (FastAPI/Flask/cloud function) that exposes an endpoint (e.g. `/assistant`).
-2. The backend holds the OpenAI key, receives prompts from the client, calls OpenAI, and returns the response.
-3. The Qt front-end communicates only with your backend; the key remains safe.
-
-Example FastAPI skeleton:
-
-```python
-from fastapi import FastAPI
-from pydantic import BaseModel
-from openai import OpenAI
-import os
-
-client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
-app = FastAPI()
-
-class Prompt(BaseModel):
-	message: str
-
-@app.post("/assistant")
-def ask_agent(payload: Prompt):
-	result = client.responses.create(
-		model="gpt-4.1",
-		input=payload.message,
-	)
-	return {"reply": result.output_text}
-```
-
-Qt client snippet:
-
-```python
-import requests
-
-resp = requests.post(
-    "https://your-backend.com/assistant",
-    json={"message": prompt_text},
-    timeout=30,
-)
-agent_reply = resp.json()["reply"]
-```
-
-### Option 2 — Local environment variables (for development only)
-
 If you prefer direct OpenAI access during local testing, place your credentials in environment variables **before launching** the app:
 
 ```powershell
@@ -187,6 +141,5 @@ Distribute the resulting folder under `dist/`. Provide a small PowerShell launch
 
 ---
 
-Built with ❤️ by CHYMERA for automated chest X-ray quality assessment.
 
 
