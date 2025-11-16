@@ -11,6 +11,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "PySide6>=6.6",
+    "PySide6-Addons>=6.6",
     "torch",
     "torchvision",
     "tensorflow",
@@ -24,6 +25,7 @@ dependencies = [
     "pillow",
     "h5py",
     "torchcam",
+    "openai>=1.37",
 ]
 
 [project.scripts]

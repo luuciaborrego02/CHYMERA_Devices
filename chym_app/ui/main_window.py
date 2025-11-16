@@ -17,14 +17,16 @@ from PySide6.QtWidgets import (
     QSplitter,
     QStackedWidget,
     QToolBar,
+    QDockWidget,
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
     QTextEdit,
 )
 
-from ..config import APP_NAME
+from ..config import APP_NAME, OPENAI_API_KEY, OPENAI_ASSISTANT_ID
 from ..core.image_processor import AnalysisBundle, ImageProcessor, ProcessingError
+from ..core.assistant import AssistantClient, AssistantConfig, AssistantUnavailable
 from ..widgets.analysis_views import (
     InclusionView,
     RotationView,
@@ -34,6 +36,7 @@ from ..widgets.analysis_views import (
     ScapulaView,
     GlobalStatsView,
 )
+from ..widgets.chat_panel import AssistantChatPanel
 
 
 class ImageListWidget(QListWidget):
@@ -63,9 +66,14 @@ class MainWindow(QMainWindow):
         self._image_processor = ImageProcessor()
         self._analyses: Dict[str, AnalysisBundle] = {}
         self._selected_image: Optional[str] = None
+        self._assistant_client: Optional[AssistantClient] = None
+        self._view_menu = self.menuBar().addMenu("&View")
 
         self._create_toolbar()
         self._build_layout()
+        self._init_chat_panel()
+
+        self._apply_styles()
 
     # ------------------------------------------------------------------
     # UI construction helpers
@@ -96,7 +104,9 @@ class MainWindow(QMainWindow):
         self._image_list = ImageListWidget()
         self._image_list.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
         self._image_list.selection_changed.connect(self._on_image_selected)
-        sidebar_layout.addWidget(QLabel("Loaded images"))
+        images_label = QLabel("Loaded images")
+        images_label.setObjectName("sectionTitle")
+        sidebar_layout.addWidget(images_label)
         sidebar_layout.addWidget(self._image_list)
 
         self._analysis_selector = QListWidget()
@@ -112,7 +122,9 @@ class MainWindow(QMainWindow):
             QListWidgetItem(view_name, self._analysis_selector)
         self._analysis_selector.setCurrentRow(0)
         self._analysis_selector.currentRowChanged.connect(self._display_analysis)
-        sidebar_layout.addWidget(QLabel("Analysis views"))
+        analysis_label = QLabel("Analysis views")
+        analysis_label.setObjectName("sectionTitle")
+        sidebar_layout.addWidget(analysis_label)
         sidebar_layout.addWidget(self._analysis_selector)
 
         splitter.addWidget(sidebar)
@@ -139,10 +151,14 @@ class MainWindow(QMainWindow):
         self._status_text = QTextEdit()
         self._status_text.setReadOnly(True)
         self._status_text.setFixedHeight(120)
+        self._status_text.setStyleSheet(
+            "background-color: #0f172a; border: 1px solid #1f2937; border-radius: 8px;"
+        )
         footer_layout.addWidget(self._status_text)
 
         self._final_score_label = QLabel("Final score: pending")
         self._final_score_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self._final_score_label.setStyleSheet("font-size: 20px; font-weight: 600;")
         footer_layout.addWidget(self._final_score_label)
 
         wrapper = QWidget()
@@ -168,8 +184,11 @@ class MainWindow(QMainWindow):
             return
 
         self._image_list.clear()
+        self._selected_image = None
         for file in files:
             QListWidgetItem(file, self._image_list)
+
+        self._ensure_image_selection()
 
         self._analyses.clear()
         self._status_text.clear()
@@ -193,10 +212,11 @@ class MainWindow(QMainWindow):
             self._analyses[path] = bundle
             self._status_text.append(f"✅ {path}: analysis completed")
 
+        self._ensure_image_selection()
         if self._selected_image:
             self._display_current_analysis()
 
-        self._update_final_score_summary()
+        self._update_final_score_label()
 
     @Slot(str)
     def _on_image_selected(self, path: str) -> None:
@@ -213,21 +233,106 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     def _display_current_analysis(self) -> None:
         if not self._selected_image:
+            self._update_final_score_label()
             return
 
         bundle = self._analyses.get(self._selected_image)
         if not bundle:
             self._status_text.append(f"ℹ️ {self._selected_image}: run analyses to view results")
+            self._update_final_score_label()
             return
 
         widget = self._stack.currentWidget()
         if hasattr(widget, "display"):
             widget.display(bundle)
+        self._update_final_score_label()
 
-    def _update_final_score_summary(self) -> None:
+    def _update_final_score_label(self) -> None:
         if not self._analyses:
+            self._final_score_label.setText("Final score: pending")
+            return
+
+        if self._selected_image and self._selected_image in self._analyses:
+            selected_bundle = self._analyses[self._selected_image]
+            display_name = pathlib.Path(self._selected_image).name
+            self._final_score_label.setText(
+                f"Final score ({display_name}): {selected_bundle.final_score}"
+            )
             return
 
         scores = [bundle.final_score for bundle in self._analyses.values()]
         summary = ", ".join(scores)
         self._final_score_label.setText(f"Final score: {summary}")
+
+    def _ensure_image_selection(self) -> None:
+        if self._image_list.count() == 0:
+            self._selected_image = None
+            return
+
+        if self._image_list.currentRow() == -1:
+            self._image_list.blockSignals(True)
+            self._image_list.setCurrentRow(0)
+            self._image_list.blockSignals(False)
+
+        current_item = self._image_list.currentItem()
+        if current_item is not None:
+            self._selected_image = current_item.text()
+
+    def _createDockWidgetAction(self, dock: QDockWidget) -> None:
+        if self._view_menu is None:
+            return
+        action = dock.toggleViewAction()
+        action.setText("ChymAI Panel")
+        self._view_menu.addAction(action)
+
+    def _init_chat_panel(self) -> None:
+        client: Optional[AssistantClient] = None
+        if not OPENAI_API_KEY or not OPENAI_ASSISTANT_ID:
+            self._status_text.append("ℹ️ ChymAI disabled: missing OPENAI credentials.")
+        else:
+            config = AssistantConfig(
+                api_key=OPENAI_API_KEY,
+                assistant_id=OPENAI_ASSISTANT_ID,
+            )
+            try:
+                client = AssistantClient(config)
+            except AssistantUnavailable as exc:
+                self._status_text.append(f"ℹ️ ChymAI disabled: {exc}")
+
+        self._assistant_client = client
+        dock = QDockWidget("ChymAI", self)
+        dock.setObjectName("ChymAIDock")
+        dock.setWidget(AssistantChatPanel(client))
+        dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
+        dock.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
+        self.addDockWidget(Qt.RightDockWidgetArea, dock)
+        self._createDockWidgetAction(dock)
+
+    def _apply_styles(self) -> None:
+        self.setStyleSheet(
+            """
+            QListWidget {
+                background-color: #0f172a;
+                border: 1px solid #1f2937;
+                border-radius: 8px;
+                padding: 8px;
+            }
+            QListWidget::item:selected {
+                background-color: #1d4ed8;
+                color: #f1f5f9;
+            }
+            QLabel#sectionTitle {
+                color: #94a3b8;
+                text-transform: uppercase;
+                font-size: 12px;
+                letter-spacing: 1px;
+            }
+            QToolBar {
+                background-color: #0f172a;
+                border-bottom: 1px solid #1f2937;
+            }
+            QSplitter::handle {
+                background-color: #1f2937;
+            }
+            """
+        )

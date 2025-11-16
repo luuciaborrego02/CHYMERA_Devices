@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Optional
+import io
 
 import cv2
 import numpy as np
@@ -24,8 +25,19 @@ except Exception:  # pragma: no cover - optional import fallback
 
 try:
     import plotly.express as px
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+    import plotly.io as pio
 except Exception:  # pragma: no cover
     px = None  # type: ignore
+    go = None  # type: ignore
+    make_subplots = None  # type: ignore
+    pio = None  # type: ignore
+
+try:
+    import matplotlib.pyplot as plt
+except Exception:  # pragma: no cover
+    plt = None  # type: ignore
 
 
 class ProcessingError(RuntimeError):
@@ -52,6 +64,7 @@ class GlobalStats:
     needs_review: int
     issues_detected: int
     bad: int
+    parameter_counts: Dict[str, int] = field(default_factory=dict)
 
 
 @dataclass
@@ -72,6 +85,7 @@ class AnalysisBundle:
     overlay_ctr: Optional[np.ndarray] = None
     overlay_scapula: Optional[np.ndarray] = None
     global_stats_chart: Optional[np.ndarray] = None
+    global_stats_html: Optional[str] = None
     unet_cam: Optional[np.ndarray] = None
     hough_angles: Optional[HoughAngles] = None
     scapula_overlap: ScapulaOverlap = field(default_factory=lambda: ScapulaOverlap(0.0, 0.0))
@@ -105,8 +119,7 @@ class ImageProcessor:
         inclusion_label = self._classify_mask(clf, filtered_mask)
 
         overlay_lung = self._blend_image(image, filtered_mask)
-        unet_cam = self._compute_unet_cam(unet, origin_tensor, image, device)
-
+        unet_cam = None
         rotation_bundle = self._analyse_rotation(image, clavicle_model)
 
         artifacts_result_1 = yolo_model_1(self._to_bgr(image))[0]
@@ -152,7 +165,10 @@ class ImageProcessor:
 
         self._history[image_path] = bundle
         bundle.global_stats = self._global_stats()
-        bundle.global_stats_chart = self._global_stats_chart(bundle.global_stats)
+        (
+            bundle.global_stats_html,
+            bundle.global_stats_chart,
+        ) = self._global_stats_visuals(bundle.global_stats)
         return bundle
 
     # ------------------------------------------------------------------
@@ -162,23 +178,231 @@ class ImageProcessor:
         needs_review = sum(1 for b in self._history.values() if b.final_score.startswith("🟡"))
         issues = sum(1 for b in self._history.values() if b.final_score.startswith("🟠"))
         bad = sum(1 for b in self._history.values() if b.final_score.startswith("🔴"))
-        return GlobalStats(total, all_good, needs_review, issues, bad)
+        parameter_counts = {
+            "Inclusion apta": sum(1 for b in self._history.values() if b.inclusion_label == "INCLUSIÓN APTA ✅"),
+            "Rotación correcta": sum(
+                1 for b in self._history.values() if (b.orientation_status or "").startswith("Correct rotation")
+            ),
+            "Balance clavicular ok": sum(1 for b in self._history.values() if b.rotation_balance.startswith("🟢")),
+            "CTR ≤ 0.5": sum(1 for b in self._history.values() if b.ctr_ratio <= 0.5),
+            "Sin artefactos": sum(
+                1
+                for b in self._history.values()
+                if b.artifacts_count_1 == 0 and b.artifacts_count_2 == 0
+            ),
+        }
+        return GlobalStats(total, all_good, needs_review, issues, bad, parameter_counts)
 
-    def _global_stats_chart(self, stats: GlobalStats) -> Optional[np.ndarray]:
-        if px is None or stats.total_images == 0:
+    def _global_stats_visuals(self, stats: GlobalStats) -> tuple[Optional[str], Optional[np.ndarray]]:
+        if stats.total_images == 0:
+            return None, None
+
+        html: Optional[str] = None
+        image: Optional[np.ndarray] = None
+
+        if px is not None and go is not None:
+            figures = self._build_plotly_dashboard_figures(stats)
+            if figures:
+                html = self._figures_to_html(figures)
+                image = self._figures_to_image(stats)
+
+        if html is None and plt is not None:
+            image = self._matplotlib_stats_chart(stats)
+
+        return html, image
+
+    def _build_plotly_dashboard_figures(self, stats: GlobalStats):
+        if pio is None:
             return None
-        fig = px.pie(
-            names=["All good", "Needs review", "Issues", "Bad"],
-            values=[stats.all_good, stats.needs_review, stats.issues_detected, stats.bad],
-            title="Distribution of final scores",
-            color_discrete_sequence=px.colors.qualitative.Set3,
+
+        labels = ["All good", "Needs review", "Issues", "Bad"]
+        values = [stats.all_good, stats.needs_review, stats.issues_detected, stats.bad]
+        colors = px.colors.qualitative.Set3[: len(labels)]
+        total = max(stats.total_images, 1)
+        percentages = [round(v / total * 100, 1) for v in values]
+
+        pie_fig = go.Figure(
+            data=[
+                go.Pie(
+                    labels=labels,
+                    values=values,
+                    hole=0.55,
+                    text=[f"{p}%" for p in percentages],
+                    textinfo="label+text",
+                    marker_colors=colors,
+                )
+            ]
         )
-        fig.update_layout(paper_bgcolor="#0e1117", font_color="#fafafa")
+        pie_fig.update_layout(
+            title="Final score distribution",
+            paper_bgcolor="#0e1117",
+            font_color="#fafafa",
+            showlegend=False,
+        )
+
+        param_labels = list(stats.parameter_counts.keys()) or ["No data"]
+        param_values = list(stats.parameter_counts.values()) or [0]
+        param_colors = px.colors.qualitative.Set2[: len(param_labels)]
+
+        bar_fig = go.Figure(
+            data=[
+                go.Bar(
+                    x=param_values,
+                    y=param_labels,
+                    orientation="h",
+                    marker_color=param_colors,
+                    text=[f"{v}/{total}" for v in param_values],
+                    textposition="outside",
+                )
+            ]
+        )
+        bar_fig.update_layout(
+            title="Checks passed per parameter",
+            paper_bgcolor="#0e1117",
+            plot_bgcolor="#0e1117",
+            font_color="#fafafa",
+            xaxis=dict(showgrid=False, color="#fafafa"),
+            yaxis=dict(showgrid=False, color="#fafafa"),
+            margin=dict(l=10, r=40, t=60, b=40),
+        )
+
+        return [pie_fig, bar_fig]
+
+    def _figures_to_html(self, figures) -> Optional[str]:
+        if pio is None or not figures:
+            return None
+        fragments: list[str] = []
+        for idx, fig in enumerate(figures):
+            try:
+                fragments.append(
+                    pio.to_html(
+                        fig,
+                        include_plotlyjs="cdn" if idx == 0 else False,
+                        full_html=False,
+                        default_height="420px",
+                    )
+                )
+            except Exception:
+                return None
+        grid = "\n".join(f"<div class='chart-cell'>{frag}</div>" for frag in fragments)
+        style = (
+            "<style>"
+            ".chart-grid{display:flex;gap:24px;flex-wrap:wrap;}"
+            ".chart-cell{flex:1 1 420px;background:#0e1117;border:1px solid #1f2937;"
+            "border-radius:12px;padding:8px;}"
+            "</style>"
+        )
+        return f"{style}<div class='chart-grid'>{grid}</div>"
+
+    def _figures_to_image(self, stats: GlobalStats) -> Optional[np.ndarray]:
+        if pio is None or make_subplots is None:
+            return None
+
+        labels = ["All good", "Needs review", "Issues", "Bad"]
+        values = [stats.all_good, stats.needs_review, stats.issues_detected, stats.bad]
+        colors = px.colors.qualitative.Set3[: len(labels)]
+        total = max(stats.total_images, 1)
+        percentages = [round(v / total * 100, 1) for v in values]
+
+        param_labels = list(stats.parameter_counts.keys()) or ["No data"]
+        param_values = list(stats.parameter_counts.values()) or [0]
+        param_colors = px.colors.qualitative.Set2[: len(param_labels)]
+
+        fig = make_subplots(
+            rows=1,
+            cols=2,
+            specs=[[{"type": "domain"}, {"type": "xy"}]],
+            subplot_titles=("Final scores", "Parameters"),
+        )
+        fig.add_trace(
+            go.Pie(
+                labels=labels,
+                values=values,
+                hole=0.55,
+                text=[f"{p}%" for p in percentages],
+                textinfo="label+text",
+                marker_colors=colors,
+            ),
+            row=1,
+            col=1,
+        )
+        fig.add_trace(
+            go.Bar(
+                x=param_values,
+                y=param_labels,
+                orientation="h",
+                marker_color=param_colors,
+                text=[f"{v}/{total}" for v in param_values],
+                textposition="outside",
+            ),
+            row=1,
+            col=2,
+        )
+        fig.update_layout(
+            paper_bgcolor="#0e1117",
+            plot_bgcolor="#0e1117",
+            font_color="#fafafa",
+            margin=dict(t=60, b=60, l=40, r=40),
+        )
+
         try:
-            image_bytes = fig.to_image(format="png")
+            image_bytes = fig.to_image(format="png", width=1100, height=420, scale=2, engine="kaleido")
         except Exception:
             return None
         nparr = np.frombuffer(image_bytes, np.uint8)
+        return cv2.cvtColor(cv2.imdecode(nparr, cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)
+
+    def _matplotlib_stats_chart(self, stats: GlobalStats) -> Optional[np.ndarray]:
+        if plt is None:
+            return None
+
+        labels = ["All good", "Needs review", "Issues", "Bad"]
+        values = [stats.all_good, stats.needs_review, stats.issues_detected, stats.bad]
+        total = max(stats.total_images, 1)
+        colors = ["#2ecc71", "#f1c40f", "#e67e22", "#e74c3c"]
+        param_labels = list(stats.parameter_counts.keys()) or ["No data"]
+        param_values = list(stats.parameter_counts.values()) or [0]
+        param_colors = ["#22d3ee", "#c084fc", "#f97316", "#10b981", "#facc15"]
+        while len(param_colors) < len(param_labels):
+            param_colors.extend(param_colors)
+
+        fig, axes = plt.subplots(1, 2, figsize=(11, 4), facecolor="#0e1117")
+        fig.subplots_adjust(wspace=0.4, bottom=0.25)
+
+        wedges, texts, autotexts = axes[0].pie(
+            values,
+            labels=labels,
+            autopct=lambda p: f"{p:.1f}%" if p > 0 else "",
+            colors=colors,
+            startangle=90,
+            wedgeprops=dict(width=0.45, edgecolor="#0e1117"),
+            pctdistance=0.8,
+            textprops=dict(color="#fafafa"),
+        )
+        axes[0].set_title("Score distribution", color="#fafafa")
+
+        axes[1].barh(
+            param_labels,
+            param_values,
+            color=param_colors[: len(param_labels)],
+        )
+        for idx, val in enumerate(param_values):
+            axes[1].text(val + max(total * 0.02, 0.5), idx, f"{val}/{total}", color="#fafafa", va="center")
+        axes[1].set_title("Checks passed", color="#fafafa")
+        axes[1].tick_params(colors="#fafafa")
+        axes[1].set_facecolor("#0e1117")
+        axes[1].spines["bottom"].set_color("#fafafa")
+        axes[1].spines["left"].set_color("#fafafa")
+        axes[1].spines["top"].set_visible(False)
+        axes[1].spines["right"].set_visible(False)
+
+        fig.text(0.5, 0.08, f"Total processed: {stats.total_images}", ha="center", color="#fafafa", fontsize=12)
+
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", dpi=160, bbox_inches="tight", facecolor=fig.get_facecolor())
+        plt.close(fig)
+        buf.seek(0)
+        nparr = np.frombuffer(buf.getvalue(), np.uint8)
         return cv2.cvtColor(cv2.imdecode(nparr, cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)
 
     # ------------------------------------------------------------------
@@ -192,12 +416,16 @@ class ImageProcessor:
     @staticmethod
     def _predict_mask(unet: torch.nn.Module, tensor: torch.Tensor, device: torch.device) -> np.ndarray:
         input_tensor = torch.stack([tensor]).to(device)
-        with torch.inference_mode():
-        with torch.no_grad():
-            output = unet(input_tensor)
-            probs = torch.nn.functional.log_softmax(output, dim=1)
-            pred_mask = torch.argmax(probs, dim=1)[0].cpu().numpy()
+        input_tensor.requires_grad_(True)   # necesario para TorchCAM
+
+        unet.train()   # activar gradientes
+
+        output = unet(input_tensor)
+        probs = torch.nn.functional.log_softmax(output, dim=1)
+        pred_mask = torch.argmax(probs, dim=1)[0].cpu().numpy()
+
         return (pred_mask * 255).astype(np.uint8)
+
 
     @staticmethod
     def _get_filtered_mask(mask: np.ndarray) -> np.ndarray:
@@ -235,20 +463,38 @@ class ImageProcessor:
     ) -> Optional[np.ndarray]:
         if GradCAM is None:
             return None
+
         extractor = GradCAM(unet, target_layer="dec1.conv2", input_shape=(1, 512, 512))
+
         input_tensor = torch.stack([tensor]).to(device)
         input_tensor.requires_grad_(True)
+
+        # Asegurar gradientes activados
         with torch.enable_grad():
-        with torch.no_grad():
             output = unet(input_tensor)
+
         class_idx = 1
-        activation_map = extractor(class_idx, output)[0].cpu().numpy()
+        # Normalizar CAM
         activation_map = (activation_map - activation_map.min()) / (activation_map.max() - activation_map.min() + 1e-8)
+
+        # Redimensionar
         activation_map = cv2.resize(activation_map, (image.width, image.height))
-        activation_map_uint8 = np.uint8(activation_map * 255)
+
+        # Forzar formato correcto: CV_8UC1
+        activation_map_uint8 = (activation_map * 255).astype(np.uint8)
+
+        # Corregir dimensión incorrecta (si viene como H x W x 1)
+        if activation_map_uint8.ndim == 3 and activation_map_uint8.shape[2] == 1:
+            activation_map_uint8 = activation_map_uint8[:, :, 0]
+
+        # Aplicar colormap
         heatmap = cv2.applyColorMap(activation_map_uint8, cv2.COLORMAP_JET)
+
+        # Mezcla final
         overlay = cv2.addWeighted(np.array(image), 0.6, heatmap, 0.4, 0)
         return overlay
+            
+
 
     # Rotation / clavicle -------------------------------------------------
     @dataclass

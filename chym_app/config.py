@@ -1,6 +1,7 @@
 """Application-wide configuration values."""
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -22,10 +23,22 @@ palette = Palette()
 APP_NAME = "Quality Chest Analyzer"
 APP_ICON = "🩺"
 
+
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+OPENAI_ASSISTANT_ID = os.environ.get("OPENAI_ASSISTANT_ID")
+
+
 _WINDOWS_BASE = Path(r"G:\CHYMERA")
 if _WINDOWS_BASE.exists():
     BASE_PATH = _WINDOWS_BASE
 else:
     BASE_PATH = Path(__file__).resolve().parents[1]
 
-__all__ = ["palette", "APP_NAME", "APP_ICON", "BASE_PATH"]
+__all__ = [
+    "palette",
+    "APP_NAME",
+    "APP_ICON",
+    "BASE_PATH",
+    "OPENAI_API_KEY",
+    "OPENAI_ASSISTANT_ID",
+]
